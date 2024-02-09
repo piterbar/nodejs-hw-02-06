@@ -23,7 +23,7 @@ const contactSchema = new mongoose.Schema({
 
 const Contact = mongoose.model('Contact', contactSchema);
 
-// CRUD
+// CRUD //
 const listContacts = async () => {
   return await Contact.find();
 };
