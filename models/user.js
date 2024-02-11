@@ -1,37 +1,34 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const gravatar = require('gravatar');
 
 const userSchema = new mongoose.Schema({
-  password: {
-    type: String,
-    required: [true, 'Password is required'],
-  },
   email: {
     type: String,
     required: [true, 'Email is required'],
     unique: true,
   },
+  password: {
+    type: String,
+    required: [true, 'Password is required'],
+  },
   subscription: {
     type: String,
-    enum: ["starter", "pro", "business"],
-    default: "starter"
+    enum: ['starter', 'pro', 'business'],
+    default: 'starter',
   },
-  token: {
+  avatarURL: {
     type: String,
-    default: null,
   },
 });
 
-userSchema.pre('save', async function (next) {
-  if (this.isModified('password')) {
-    this.password = await bcrypt.hash(this.password, 8);
+userSchema.pre('save', function (next) {
+  if (!this.avatarURL) {
+    this.avatarURL = gravatar.url(this.email, { s: '250', d: 'retro' }, true);
   }
   next();
 });
 
-userSchema.methods.isValidPassword = async function (password) {
-  return bcrypt.compare(password, this.password);
-};
+const User = mongoose.model('User', userSchema);
 
-const User = mongoose.model('user', userSchema);
 module.exports = User;
