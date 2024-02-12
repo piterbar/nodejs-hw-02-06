@@ -9,6 +9,8 @@ const multer = require('multer');
 const jimp = require('jimp');
 const path = require('path');
 const fs = require('fs');
+const { nanoid } = require('nanoid');
+const { sendVerificationEmail } = require('../../helpers/emailHelper');
 
 const router = express.Router();
 
@@ -31,103 +33,57 @@ const storage = multer.diskStorage({
 const upload = multer({ storage: storage });
 
 router.post('/signup', async (req, res) => {
-  try {
-    const { email, password, subscription } = await userSchema.validateAsync(req.body);
-    const existingUser = await User.findOne({ email });
-    if (existingUser) {
-      return res.status(409).json({ message: "Email in use" });
-    }
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const avatarURL = gravatar.url(email, { s: '250', d: 'retro' }, true);
-    const newUser = new User({
-      email,
-      password: hashedPassword,
-      subscription,
-      avatarURL
-    });
-    await newUser.save();
-    res.status(201).json({
-      user: {
-        email: newUser.email,
-        subscription: newUser.subscription,
-        avatarURL: newUser.avatarURL
-      }
-    });
-  } catch (err) {
-    if (err.isJoi) return res.status(400).json({ message: err.details[0].message });
-    res.status(500).json({ message: err.message });
+  const { email, password, subscription } = await userSchema.validateAsync(req.body);
+  const existingUser = await User.findOne({ email });
+  if (existingUser) {
+    return res.status(409).json({ message: "Email in use" });
   }
-});
-
-router.post('/login', async (req, res) => {
-  try {
-    const { email, password } = await userSchema.validateAsync(req.body, {
-      allowUnknown: true,
-      abortEarly: false
-    });
-    const user = await User.findOne({ email });
-    if (!user) {
-      return res.status(401).json({ message: "Email or password is wrong" });
-    }
-    const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) {
-      return res.status(401).json({ message: "Email or password is wrong" });
-    }
-    const token = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET, 
-      { expiresIn: '24h' }
-    );
-    user.token = token;
-    await user.save();
-    res.status(200).json({
-      token,
-      user: {
-        email: user.email,
-        subscription: user.subscription,
-        avatarURL: user.avatarURL
-      }
-    });
-  } catch (err) {
-    if (err.isJoi) return res.status(400).json({ message: err.details[0].message });
-    res.status(500).json({ message: err.message });
-  }
-});
-
-router.patch('/avatars', authenticate, upload.single('avatar'), async (req, res) => {
-  try {
-    if (!req.file) {
-      return res.status(400).json({ message: "No file uploaded" });
-    }
-    const image = await jimp.read(req.file.path);
-    await image.cover(250, 250).quality(90).writeAsync(req.file.path);
-    const fileName = `${req.user._id}${path.extname(req.file.originalname)}`;
-    const avatarURL = `/avatars/${fileName}`;
-    fs.renameSync(req.file.path, `./public/avatars/${fileName}`);
-    req.user.avatarURL = avatarURL;
-    await req.user.save();
-    res.status(200).json({ avatarURL });
-  } catch (err) {
-    res.status(500).json({ message: err.message });
-  }
-});
-
-router.get('/logout', authenticate, async (req, res) => {
-  try {
-    req.user.token = null;
-    await req.user.save();
-    res.status(204).send();
-  } catch (error) {
-    res.status(401).json({ message: 'Not authorized' });
-  }
-});
-
-router.get('/current', authenticate, async (req, res) => {
-  res.status(200).json({
-    email: req.user.email,
-    subscription: req.user.subscription,
-    avatarURL: req.user.avatarURL
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const avatarURL = gravatar.url(email, { s: '250', d: 'retro' }, true);
+  const verificationToken = nanoid();
+  const newUser = new User({
+    email,
+    password: hashedPassword,
+    subscription,
+    avatarURL,
+    verificationToken
   });
+  await newUser.save();
+  sendVerificationEmail(newUser.email, verificationToken);
+  res.status(201).json({
+    user: {
+      email: newUser.email,
+      subscription: newUser.subscription,
+      avatarURL: newUser.avatarURL
+    }
+  });
+});
+
+router.get('/verify/:verificationToken', async (req, res) => {
+  const user = await User.findOne({ verificationToken: req.params.verificationToken });
+  if (!user) {
+    return res.status(404).json({ message: "Verification token is invalid or has already been used" });
+  }
+  user.verified = true;
+  user.verificationToken = undefined;
+  await user.save();
+  res.status(200).json({ message: "Email successfully verified" });
+});
+
+router.post('/verify', async (req, res) => {
+  const { email } = req.body;
+  if (!email) {
+    return res.status(400).json({ message: "missing required field email" });
+  }
+  const user = await User.findOne({ email });
+  if (!user) {
+    return res.status(404).json({ message: "User not found" });
+  }
+  if (user.verified) {
+    return res.status(400).json({ message: "Verification has already been passed" });
+  }
+  sendVerificationEmail(user.email, user.verificationToken);
+  res.status(200).json({ message: "Verification email sent" });
 });
 
 module.exports = router;
